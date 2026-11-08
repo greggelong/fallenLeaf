@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>fallen leaves</title>
+    <script src="https://gcore.jsdelivr.net/npm/p5@1.11.7/lib/p5.js"></script>
+    <script src="https://unpkg.com/ml5@1/dist/ml5.js"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #120a04;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        .warning-panel {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: #120a04;
+            color: #f6c86a;
+            font-family: "Noto Serif SC", "Songti SC", "SimSun", serif;
+            font-size: 18px;
+            font-weight: bold;
+            padding: 12px 24px;
+            border: 2px solid #e0a53c;
+            z-index: 100;
+            pointer-events: none;
+            letter-spacing: 2px;
+        }
+
+        .counter {
+            position: absolute;
+            bottom: 30px;
+            left: 20px;
+            background: #120a04;
+            color: #f0d7a8;
+            font-family: "Noto Serif SC", "Songti SC", "SimSun", monospace;
+            padding: 8px 16px;
+            border: 1px solid #c8862f;
+            font-size: 18px;
+            z-index: 100;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="warning-panel" id="statusPanel">落叶 · FALLEN LEAVES</div>
+    <div class="counter" id="detectionCounter">落叶 × 0</div>
+
+    <script>
+        /* ---------------------------------------------------------------
+           The poetic word drawn on every box. Change this freely:
+           '落叶' (fallen leaves), '一叶知秋', '霜叶', '秋意' ...
+        ----------------------------------------------------------------*/
+        const PHRASE = '落叶';
+
+        // Autumn palette — ginkgo gold, amber, burnt orange, russet, bark brown
+        const AUTUMN = [
+            [232, 178, 58],   // ginkgo gold
+            [226, 155, 42],   // amber
+            [205, 121, 35],   // burnt orange
+            [186, 96, 38],    // pumpkin
+            [162, 84, 44],    // russet
+            [138, 74, 42],    // bark brown
+            [196, 140, 52],   // ochre
+            [151, 58, 40]     // deep maple
+        ];
+
+        let video;
+        let detector;
+        let detections = [];
+        let videoWidth = 0, videoHeight = 0;
+        let scale = 1, offsetX = 0, offsetY = 0;
+
+        const statusEl = document.getElementById('statusPanel');
+        const counterEl = document.getElementById('detectionCounter');
+
+        function preload() {
+            statusEl.textContent = "LOADING MODEL...";
+            detector = ml5.objectDetection('cocossd');
+        }
+
+        function setup() {
+            createCanvas(windowWidth, windowHeight);
+            pixelDensity(1);
+
+            video = createCapture({
+                video: { facingMode: "environment" },
+                audio: false
+            });
+            video.hide();
+
+            video.elt.onloadedmetadata = () => {
+                videoWidth = video.elt.videoWidth;
+                videoHeight = video.elt.videoHeight;
+                statusEl.textContent = "落叶 · FALLEN LEAVES";
+                updateVideoMapping();
+
+                detector.detectStart(video, (results) => {
+                    detections = results;
+                });
+            };
+
+            video.elt.onerror = (err) => {
+                statusEl.textContent = "CAMERA ERROR";
+                console.error(err);
+            };
+        }
+
+        function updateVideoMapping() {
+            if (videoWidth === 0 || videoHeight === 0 || width === 0 || height === 0) return;
+            let scaleW = width / videoWidth;
+            let scaleH = height / videoHeight;
+            scale = Math.min(scaleW, scaleH);
+            offsetX = (width - videoWidth * scale) / 2;
+            offsetY = (height - videoHeight * scale) / 2;
+        }
+
+        /* ---------------- deterministic helpers ---------------- */
+
+        // FNV-1a: stable number from a label, so a "person" keeps its colour
+        function hashString(s) {
+            let h = 2166136261;
+            for (let i = 0; i < s.length; i++) {
+                h ^= s.charCodeAt(i);
+                h = Math.imul(h, 16777619);
+            }
+            return h >>> 0;
+        }
+
+        // text colour that stays readable on the box colour
+        function textColorFor(c) {
+            const lum = 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+            return lum > 145 ? [56, 24, 4] : [255, 244, 216];
+        }
+
+        /* ---------------- drawing ---------------- */
+
+        function drawAutumnBox(d) {
+            const dx = d.x * scale + offsetX;
+            const dy = d.y * scale + offsetY;
+            const dw = d.width * scale;
+            const dh = d.height * scale;
+            if (dw < 4 || dh < 4) return;
+
+            const label = d.label || 'object';
+            const seed = hashString(label);
+            const c = AUTUMN[seed % AUTUMN.length];
+
+            // 1. solid autumn fill (this is what actually covers the subject)
+            noStroke();
+            fill(c[0], c[1], c[2]);
+            rect(dx, dy, dw, dh);
+
+            // 2. darker leafy border
+            noFill();
+            stroke(c[0] * 0.42, c[1] * 0.42, c[2] * 0.42);
+            strokeWeight(2.5);
+            rect(dx, dy, dw, dh);
+
+            // 3. poetic text + label
+            const t = textColorFor(c);
+            push();
+            textFont('"Noto Serif SC","Songti SC","SimSun","Microsoft YaHei",serif');
+            textAlign(CENTER, CENTER);
+            noStroke();
+            fill(t[0], t[1], t[2]);
+
+            const fs1 = Math.min(dw * 0.42, dh * 0.55, 46);   // main word size
+            if (fs1 >= 9) {
+                const fs2 = fs1 * 0.40;                        // label size
+                const gap = fs1 * 0.10;
+                const showLabel = fs2 >= 8 && dw >= 46;
+                const totalH = fs1 + (showLabel ? gap + fs2 : 0);
+                const top = dy + (dh - totalH) / 2;
+
+                textSize(fs1);
+                text(PHRASE, dx + dw / 2, top + fs1 / 2);
+
+                if (showLabel) {
+                    textSize(fs2);
+                    text(label, dx + dw / 2, top + fs1 + gap + fs2 / 2);
+                }
+            }
+            pop();
+        }
+
+        /* ---------------- main loop ---------------- */
+
+        function draw() {
+            background(18, 10, 4);
+
+            if (video && videoWidth > 0 && video.elt.readyState >= 2) {
+                updateVideoMapping();
+                image(video, offsetX, offsetY, videoWidth * scale, videoHeight * scale);
+
+                for (const d of detections) {
+                    drawAutumnBox(d);
+                }
+
+                counterEl.textContent = `落叶 × ${detections.length}`;
+
+                if (detections.length === 0 && millis() > 3000) {
+                    push();
+                    textFont('"Noto Serif SC","Songti SC","SimSun",serif');
+                    fill(214, 178, 110);
+                    noStroke();
+                    textAlign(CENTER);
+                    textSize(16);
+                    text("等待落叶 · NO LEAVES YET", width / 2, height - 40);
+                    pop();
+                }
+            } else {
+                push();
+                textFont('"Noto Serif SC","Songti SC","SimSun",serif');
+                fill(246, 200, 106);
+                textAlign(CENTER, CENTER);
+                textSize(20);
+                text("WAITING FOR CAMERA", width / 2, height / 2);
+                pop();
+            }
+        }
+
+        function windowResized() {
+            resizeCanvas(windowWidth, windowHeight);
+            updateVideoMapping();
+        }
+
+        window.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+        window.addEventListener('gesturestart', e => e.preventDefault());
+    </script>
+</body>
+
+</html>
